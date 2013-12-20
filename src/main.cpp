@@ -22,6 +22,7 @@
 #include <vtkPointData.h>
 #include <vtkFloatArray.h>
 #include <vtkTriangle.h>
+#include <vtkPLYWriter.h>
 
 cv::VideoCapture captureDevice;
 
@@ -46,7 +47,7 @@ void displayMesh(cv::Mat image) {
     /* insert x,y,z coords */
     for (int y=0; y<height; y++) {
         for (int x=0; x<width; x++) {
-            points->InsertNextPoint(x, y, image.at<float>(y,x));
+            points->InsertNextPoint(x, y, image.at<float>(cv::Point(x,y)));
         }
     }
     
@@ -96,6 +97,15 @@ void displayMesh(cv::Mat image) {
     renderer->AddActor(modelActor);
     vtkSmartPointer<vtkRenderWindowInteractor> interactor = vtkSmartPointer<vtkRenderWindowInteractor>::New();
     interactor->SetRenderWindow(renderWindow);
+
+	/* exporting model */
+	vtkSmartPointer<vtkPLYWriter> plyExporter = vtkSmartPointer<vtkPLYWriter>::New();
+	plyExporter->SetInputData(polyData);
+	plyExporter->SetFileName("export.ply");
+	plyExporter->SetColorModeToDefault();
+	plyExporter->SetArrayName("Colors");
+	plyExporter->Update();
+	plyExporter->Write();
     
     /* render mesh */
     renderWindow->Render();
@@ -223,31 +233,33 @@ cv::Mat localHeightfield(cv::Mat Normals, cv::Mat Mask) {
 
 	double min, max;
 	cv::minMaxIdx(Z, &min, &max);
+	std::cout << "min,max: " << min << "," << max << std::endl;
 	cv::Mat adjMap;
-	cv::convertScaleAbs(Z, adjMap, 100 / max);
+	cv::convertScaleAbs(Z, adjMap, 255 / max);
 	cv::imshow("Local Depthmap", adjMap);
-	return adjMap;
+	return Z/(max-std::abs(min))*50;
 }
 
 cv::Mat globalHeightfield(cv::Mat Normals) {
     
 	int height = Normals.rows;
     int width = Normals.cols;
-    cv::Mat Pgrads(height, width, CV_32FC1, cv::Scalar::all(0));
+	cv::Mat Pgrads(height, width, CV_32FC1, cv::Scalar::all(0));
     cv::Mat Qgrads(height, width, CV_32FC1, cv::Scalar::all(0));
     
     for (int y=0; y<height; y++) {
         for (int x=0; x<width; x++) {
-			/* reordering surface normals (from U, which was zxy) */
-			cv::Vec3b tmp = Normals.at<cv::Vec3b>(cv::Point(x,y));
-			cv::Vec3f n = cv::Vec3f(float(tmp[1]), float(tmp[2]), float(tmp[0]));
+			/* reordering surface normals (from U, which was z,x,y) */
+			cv::Vec3f n = cv::Vec3f(Normals.data[y*width*3+x*3+1], Normals.data[y*width*3+x*3+2], Normals.data[y*width*3+x*3+0]);
+			if (n[2] == 0.0f) { n[2] = 1.0f; }
 			cv::normalize(n, n);
-
-			/* offset: (row * numCols * numChannels) + (col * numChannels) + (channel) */
 			Pgrads.at<float>(cv::Point(x,y)) = n[0]/n[2];
 			Qgrads.at<float>(cv::Point(x,y)) = n[1]/n[2];
         }
     }
+
+	cv::imshow("Pgrads", Pgrads);
+	cv::imshow("Qgrads", Qgrads);
 
     cv::Mat P(Pgrads.rows, Pgrads.cols, CV_32FC2, cv::Scalar::all(0));
     cv::Mat Q(Pgrads.rows, Pgrads.cols, CV_32FC2, cv::Scalar::all(0));
@@ -259,26 +271,27 @@ cv::Mat globalHeightfield(cv::Mat Normals) {
     for (int i=0; i<Pgrads.rows; i++) {
         for (int j=0; j<Pgrads.cols; j++) {
             if (i != 0 || j != 0) {
-                float v = sin(i*2*CV_PI/Pgrads.rows);
-                float u = sin(j*2*CV_PI/Pgrads.cols);
+				float u = sin(i*2.0f*float(CV_PI)/float(Pgrads.rows));
+                float v = sin(j*2.0f*float(CV_PI)/float(Pgrads.cols));
                 float uv = u*u + v*v;
-                float d = (1+0)*uv + 0*uv*uv;
-                Z.at<cv::Vec2f>(i, j)[0] = (u*P.at<cv::Vec2f>(i, j)[1] + v*Q.at<cv::Vec2f>(i, j)[1]) / d;
-                Z.at<cv::Vec2f>(i, j)[1] = (-u*P.at<cv::Vec2f>(i, j)[0] - v*Q.at<cv::Vec2f>(i, j)[0]) / d;
+                float d = uv;
+                Z.at<cv::Vec2f>(i,j)[0] = (u*P.at<cv::Vec2f>(i,j)[1] + v*Q.at<cv::Vec2f>(i,j)[1]) / d;
+                Z.at<cv::Vec2f>(i,j)[1] = (-u*P.at<cv::Vec2f>(i,j)[0] - v*Q.at<cv::Vec2f>(i,j)[0]) / d;
             }
         }
     }
     
     /* setting unknown average height to zero */
-    Z.at<cv::Vec2f>(0, 0)[0] = 0;
-    Z.at<cv::Vec2f>(0, 0)[1] = 0;
+    Z.at<cv::Vec2f>(0,0)[0] = 0;
+    Z.at<cv::Vec2f>(0,0)[1] = 0;
     
     cv::dft(Z, Z, cv::DFT_INVERSE | cv::DFT_SCALE | cv::DFT_REAL_OUTPUT);
 
 	double min, max;
 	cv::minMaxIdx(Z, &min, &max);
+	std::cout << "min,max: " << min << "," << max << std::endl;
 	cv::Mat adjMap;
-	cv::convertScaleAbs(Z, adjMap, 100 / max);
+	cv::convertScaleAbs(Z, adjMap, 255 / max);
 	cv::imshow("Global Depthmap", adjMap);
     
     return Z;
@@ -330,8 +343,8 @@ int main(int argc, char *argv[]) {
 	S.copyTo(Normals, Mask);
 	cv::imshow("Masked Normalmap", Normals);
 
-	//cv::Mat Depth = localHeightfield(Normals, Mask);
-	cv::Mat Depth = globalHeightfield(Normals);
+	cv::Mat Depth = localHeightfield(Normals, Mask);
+	//cv::Mat Depth = globalHeightfield(Normals);
 	displayMesh(Depth);
 	cv::waitKey(0);
     
