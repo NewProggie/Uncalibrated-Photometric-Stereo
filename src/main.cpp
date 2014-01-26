@@ -14,8 +14,6 @@
 #include <vtkImageViewer.h>
 #include <vtkRenderWindowInteractor.h>
 #include <vtkInteractorStyleImage.h>
-#include <vtkLight.h>
-#include <vtkLightCollection.h>
 #include <vtkRenderer.h>
 #include <vtkCellArray.h>
 #include <vtkPoints.h>
@@ -23,6 +21,7 @@
 #include <vtkFloatArray.h>
 #include <vtkTriangle.h>
 #include <vtkPLYWriter.h>
+#include <vtkWindowedSincPolyDataFilter.h>
 
 cv::VideoCapture captureDevice;
 
@@ -30,7 +29,7 @@ template <typename T> int sgn(T val) {
     return (T(0) < val) - (val < T(0));
 }
 
-void displayMesh(cv::Mat image) {
+void displayMesh(cv::Mat depthImage, cv::Mat texture) {
     
     /* creating visualization pipeline which basically looks like this:
      vtkPoints -> vtkPolyData -> vtkPolyDataMapper -> vtkActor -> vtkRenderer */
@@ -41,13 +40,19 @@ void displayMesh(cv::Mat image) {
     vtkSmartPointer<vtkRenderer> renderer = vtkSmartPointer<vtkRenderer>::New();
     vtkSmartPointer<vtkCellArray> vtkTriangles = vtkSmartPointer<vtkCellArray>::New();
     
-    int height = image.rows;
-    int width = image.cols;
+    int height = depthImage.rows;
+    int width = depthImage.cols;
     
-    /* insert x,y,z coords */
+    /* insert x,y,z coords and color information */
+    vtkSmartPointer<vtkUnsignedCharArray> colors = vtkSmartPointer<vtkUnsignedCharArray>::New();
+    colors->SetNumberOfComponents(3);
+    colors->SetName("Colors");
     for (int y=0; y<height; y++) {
         for (int x=0; x<width; x++) {
-            points->InsertNextPoint(x, y, image.at<float>(cv::Point(x,y)));
+            points->InsertNextPoint(x, y, depthImage.at<float>(cv::Point(x,y)));
+            colors->InsertNextTuple3(texture.at<uchar>(cv::Point(x,y)),
+                                     texture.at<uchar>(cv::Point(x,y)),
+                                     texture.at<uchar>(cv::Point(x,y)));
         }
     }
     
@@ -56,43 +61,40 @@ void displayMesh(cv::Mat image) {
     triangle->GetPointIds()->SetNumberOfIds(3);
     for (int i=0; i<height-1; i++) {
         for (int j=0; j<width-1; j++) {
-            triangle->GetPointIds()->SetId(0, j+(i*width));
+            triangle->GetPointIds()->SetId(2, j+(i*width));
             triangle->GetPointIds()->SetId(1, (i+1)*width+j);
-            triangle->GetPointIds()->SetId(2, j+(i*width)+1);
+            triangle->GetPointIds()->SetId(0, j+(i*width)+1);
             vtkTriangles->InsertNextCell(triangle);
-            triangle->GetPointIds()->SetId(0, (i+1)*width+j);
+            triangle->GetPointIds()->SetId(2, (i+1)*width+j);
             triangle->GetPointIds()->SetId(1, (i+1)*width+j+1);
-            triangle->GetPointIds()->SetId(2, j+(i*width)+1);
+            triangle->GetPointIds()->SetId(0, j+(i*width)+1);
             vtkTriangles->InsertNextCell(triangle);
         }
     }
     polyData->SetPoints(points);
     polyData->SetPolys(vtkTriangles);
+    polyData->GetPointData()->SetScalars(colors);
     
-    /* create two lights */
-    vtkSmartPointer<vtkLight> light1 = vtkSmartPointer<vtkLight>::New();
-    light1->SetPosition(-1, 1, 1);
-    renderer->AddLight(light1);
-    vtkSmartPointer<vtkLight> light2 = vtkSmartPointer<vtkLight>::New();
-    light2->SetPosition(1, -1, -1);
-    renderer->AddLight(light2);
+    /* mesh smoothing */
+    vtkSmartPointer<vtkWindowedSincPolyDataFilter> smoother = vtkSmartPointer<vtkWindowedSincPolyDataFilter>::New();
+    smoother->SetInputData(polyData);
+    smoother->SetNumberOfIterations(15);
+    smoother->BoundarySmoothingOff();
+    smoother->FeatureEdgeSmoothingOff();
+    smoother->SetFeatureAngle(120.0);
+    smoother->SetPassBand(.001);
+    smoother->NonManifoldSmoothingOn();
+    smoother->NormalizeCoordinatesOn();
+    smoother->Update();
     
     /* meshlab-ish background */
-    modelMapper->SetInputData(polyData);
+    modelMapper->SetInputConnection(smoother->GetOutputPort());
     renderer->SetBackground(.45, .45, .9);
     renderer->SetBackground2(.0, .0, .0);
     renderer->GradientBackgroundOn();
     vtkSmartPointer<vtkRenderWindow> renderWindow = vtkSmartPointer<vtkRenderWindow>::New();
     renderWindow->AddRenderer(renderer);
     modelActor->SetMapper(modelMapper);
-    
-    /* setting some properties to make it look just right */
-    modelActor->GetProperty()->SetSpecularColor(1, 1, 1);
-    modelActor->GetProperty()->SetAmbient(0.2);
-    modelActor->GetProperty()->SetDiffuse(0.2);
-    modelActor->GetProperty()->SetInterpolationToPhong();
-    modelActor->GetProperty()->SetSpecular(0.8);
-    modelActor->GetProperty()->SetSpecularPower(8.0);
     
     renderer->AddActor(modelActor);
     vtkSmartPointer<vtkRenderWindowInteractor> interactor = vtkSmartPointer<vtkRenderWindowInteractor>::New();
@@ -116,9 +118,13 @@ cv::Mat imageMask(std::vector<cv::Mat> camImages) {
 
 	cv::Mat Max, Blurry, Mask;
 	assert(camImages.size() >= 3);
-	cv::GaussianBlur(camImages[0]+camImages[1]+camImages[2], Blurry, cv::Size(11,11), 2.5);
-	cv::threshold(Blurry, Mask, 15, 255, CV_THRESH_BINARY);
+	cv::GaussianBlur(camImages[0]+camImages[1]+camImages[2], Blurry, cv::Size(5,5), 2.0);
+	cv::threshold(Blurry, Mask, 13, 255, CV_THRESH_BINARY);
 	cv::dilate(Mask, Mask, cv::Mat());
+    cv::dilate(Mask, Mask, cv::Mat());
+    cv::erode(Mask, Mask, cv::Mat());
+    cv::erode(Mask, Mask, cv::Mat());
+    cv::erode(Mask, Mask, cv::Mat());
 	return Mask;
 }
 
@@ -154,13 +160,15 @@ cv::Mat computeNormals(std::vector<cv::Mat> camImages) {
     for (int k=0; k<numImgs; k++) {
         for (int i=0; i<height; i++) {
             for (int j=0; j<width; j++) {
+                /* offset: (row * numCols * numChannels) + (col * numChannels) + (channel) */
                 A->data.fl[i*width*numImgs+j*numImgs+k] = (float) camImages[k].data[i*width+j];
             }
         }
     }
     
     /* cv::SVD::compute seems to be painfully slow in version 2.4.5 */
-	cvSVD(A, D, U, V, CV_SVD_V_T);
+	cvSVD(A, D, U, V);
+    
     cvReleaseMat(&A);
     cvReleaseMat(&V);
     cvReleaseMat(&D);
@@ -168,9 +176,10 @@ cv::Mat computeNormals(std::vector<cv::Mat> camImages) {
 	cv::Mat S(height, width, CV_8UC3, cv::Scalar::all(0));
     for (int i=0; i<height; i++) {
         for (int j=0; j<width; j++) {
+            
             float rSxyz = 1.0 / sqrt(U->data.fl[i*width*numImgs+j*numImgs+0]*U->data.fl[i*width*numImgs+j*numImgs+0] +
-                                   U->data.fl[i*width*numImgs+j*numImgs+1]*U->data.fl[i*width*numImgs+j*numImgs+1] +
-                                   U->data.fl[i*width*numImgs+j*numImgs+2]*U->data.fl[i*width*numImgs+j*numImgs+2]);
+                                     U->data.fl[i*width*numImgs+j*numImgs+1]*U->data.fl[i*width*numImgs+j*numImgs+1] +
+                                     U->data.fl[i*width*numImgs+j*numImgs+2]*U->data.fl[i*width*numImgs+j*numImgs+2]);
 			/* U contains the eigenvectors of AAT, which are as well the z,x,y components of the surface normals for each pixel	*/
             float sz = 128.0f + 127.0f * sgn(U->data.fl[i*width*numImgs+j*numImgs+0]) * fabs(U->data.fl[i*width*numImgs+j*numImgs+0]) * rSxyz;
             float sx = 128.0f + 127.0f * sgn(U->data.fl[i*width*numImgs+j*numImgs+1]) * fabs(U->data.fl[i*width*numImgs+j*numImgs+1]) * rSxyz;
@@ -191,7 +200,7 @@ cv::Mat localHeightfield(cv::Mat Normals, cv::Mat Mask) {
     int width = Normals.cols;
 	cv::Mat Z(height, width, CV_32FC1, cv::Scalar::all(0));
 
-	for (int k = 0; k < 1000; k++) {
+	for (int k = 0; k < 5000; k++) {
 		for (int i = 1; i < height-1; i++) {
 			for (int j = 1; j < width-1; j++) {
 				if (Mask.at<uchar>(cv::Point(j,i)) > 0) {
@@ -226,6 +235,9 @@ cv::Mat localHeightfield(cv::Mat Normals, cv::Mat Mask) {
 					} else if (top == 0 && bottom > 0 && left > 0 && right == 0) {
 						Z.at<float>(cv::Point(j,i)) = 0.5*(zBottom+zLeft)+0.25*(-Normals.at<cv::Vec3b>(cv::Point(j,i+1))[1]+uCurr+uLeft-uRight);
 					}
+                    if (Z.at<float>(cv::Point(j,i)) < 0.0f) {
+                        Z.at<float>(cv::Point(j,i)) = 0.0f;
+                    }
 				}
 			}
 		}
@@ -233,16 +245,24 @@ cv::Mat localHeightfield(cv::Mat Normals, cv::Mat Mask) {
 
 	double min, max;
 	cv::minMaxIdx(Z, &min, &max);
-	std::cout << "min,max: " << min << "," << max << std::endl;
 	cv::Mat adjMap;
 	cv::convertScaleAbs(Z, adjMap, 255 / max);
 	cv::imshow("Local Depthmap", adjMap);
-	return Z/(max-std::abs(min))*50;
+
+    /* linear transformation of matrix values from [min,max] -> [a,b] */
+    double a = 0.0, b = 150.0;
+    for (int i = 0; i < height; i++) {
+        for (int j = 0; j < width; j++) {
+            Z.at<float>(cv::Point(j,i)) = (float) a + (b-a) * ((Z.at<float>(cv::Point(j,i)) - min) / (max-min));
+        }
+    }
+    
+    return Z;
 }
 
 cv::Mat globalHeightfield(cv::Mat Normals) {
     
-	int height = Normals.rows;
+    int height = Normals.rows;
     int width = Normals.cols;
 	cv::Mat Pgrads(height, width, CV_32FC1, cv::Scalar::all(0));
     cv::Mat Qgrads(height, width, CV_32FC1, cv::Scalar::all(0));
@@ -287,6 +307,7 @@ cv::Mat globalHeightfield(cv::Mat Normals) {
     
     cv::dft(Z, Z, cv::DFT_INVERSE | cv::DFT_SCALE | cv::DFT_REAL_OUTPUT);
 
+    /* display depth map */
 	double min, max;
 	cv::minMaxIdx(Z, &min, &max);
 	std::cout << "min,max: " << min << "," << max << std::endl;
@@ -299,53 +320,67 @@ cv::Mat globalHeightfield(cv::Mat Normals) {
 
 int main(int argc, char *argv[]) {
     
+    int screenWidth = 1440;
+    int screenHeight = 900;
+    int numPics = 4;
+    
 	/* create capture device (webcam on Macbook Pro) */
 	std::vector<cv::Mat> camImages;
 	captureDevice = cv::VideoCapture(CV_CAP_ANY);
 	if (!captureDevice.isOpened()) {
 		std::cerr << "capture device error" << std::endl;
 		/* using asset images */
-		for (int i = 0; i < 3; i++)	{
-			std::stringstream s;
-			s << "..\\images\\0" << i << ".jpg";
-			camImages.push_back(cv::imread(s.str(), CV_LOAD_IMAGE_GRAYSCALE));
+		for (int i = 0; i < numPics; i++) {
+            std::stringstream s;
+            s << "../../images/image" << i << ".jpg";
+            camImages.push_back(cv::imread(s.str(), CV_LOAD_IMAGE_GRAYSCALE));
+            
 		}
 	} else {
-		/* create artificial light sources to put on monitor screen */
-		std::vector<cv::Mat> binaryPatterns;
-		for (int j=1; j<=4; j++) {
-			binaryPatterns.push_back(lightPattern(1440, 900, j, 4));
-		}
 		/* capture images from webcam while showing each pattern image */
 		cv::namedWindow("camera", CV_WINDOW_NORMAL);
-		for (int i=0; i<binaryPatterns.size(); i++) {
-			cv::imshow("camera", binaryPatterns[i]);
+		for (int i=1; i<=numPics; i++) {
+			cv::imshow("camera", lightPattern(screenWidth, screenHeight, i, numPics));
 			cv::waitKey(0);
 			cv::Mat frame;
 			captureDevice >> frame;
 			cv::cvtColor(frame, frame, CV_RGB2GRAY);
 			camImages.push_back(frame.clone());
 		}
+        /* capture ambient image (dark pattern) */
+        cv::imshow("camera", cv::Mat(screenHeight, screenWidth, CV_8UC1, cv::Scalar::all(0)));
+        cv::waitKey(0);
+        cv::Mat ambient;
+        captureDevice >> ambient;
+        cv::cvtColor(ambient, ambient, CV_RGB2GRAY);
+        
+        /* subtract cam images with ambient image */
+        for (int i=0; i<camImages.size(); i++) {
+            std::stringstream s;
+            s << "camera_" << i << ".jpg";
+            camImages[i] = camImages[i]-ambient;
+            cv::imwrite(s.str(), camImages[i]);
+        }
 	}
     
     /* display images */
     for (int i=0; i<camImages.size(); i++) {
         std::stringstream s;
         s << "0" << i << ".jpg";
-		cv::imshow(s.str(), camImages[i]);
+        cv::imshow(s.str(), camImages[i]);
     }
     
     cv::Mat S = computeNormals(camImages);
-	cv::imshow("Normalmap", S);
 
 	cv::Mat Normals(S.rows, S.cols, CV_8UC3, cv::Scalar::all(0));
 	cv::Mat Mask = imageMask(camImages);
 	S.copyTo(Normals, Mask);
-	cv::imshow("Masked Normalmap", Normals);
+	cv::imshow("(masked) normalmap.png", Normals);
 
 	cv::Mat Depth = localHeightfield(Normals, Mask);
-	//cv::Mat Depth = globalHeightfield(Normals);
-	displayMesh(Depth);
+    double min, max;
+    cv::minMaxIdx(Depth, &min, &max);
+	displayMesh(Depth, camImages[0]);
 	cv::waitKey(0);
     
     return 0;
