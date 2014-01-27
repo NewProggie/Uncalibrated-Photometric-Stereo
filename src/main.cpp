@@ -178,9 +178,7 @@ cv::Mat computeNormals(std::vector<cv::Mat> camImages) {
             float sx = 128.0f + 127.0f * sgn(U.at<float>(idx, 1)) * fabs(U.at<float>(idx, 1)) * rSxyz;
             float sy = 128.0f + 127.0f * sgn(U.at<float>(idx, 2)) * fabs(U.at<float>(idx, 2)) * rSxyz;
             
-            N.data[i*width*3+j*3+0] = sz;
-            N.data[i*width*3+j*3+1] = sx;
-            N.data[i*width*3+j*3+2] = sy;
+            N.at<cv::Vec3b>(i, j) = cv::Vec3b(sz, sx, sy);
             idx += 1;
         }
     }
