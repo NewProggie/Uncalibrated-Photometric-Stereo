@@ -151,47 +151,41 @@ cv::Mat computeNormals(std::vector<cv::Mat> camImages) {
     int width = camImages[0].cols;
     int numImgs = camImages.size();
     
-    /* output matrix A = UDV */
-	CvMat *U = cvCreateMat(height*width, numImgs, CV_32FC1);
-    CvMat *A = cvCreateMat(height*width, numImgs, CV_32FC1);
-    CvMat *D = cvCreateMat(numImgs, numImgs, CV_32FC1);
-    CvMat *V = cvCreateMat(numImgs, numImgs, CV_32FC1);
-    
-    for (int k=0; k<numImgs; k++) {
-        for (int i=0; i<height; i++) {
-            for (int j=0; j<width; j++) {
-                /* offset: (row * numCols * numChannels) + (col * numChannels) + (channel) */
-                A->data.fl[i*width*numImgs+j*numImgs+k] = (float) camImages[k].data[i*width+j];
+    /* populate A */
+    cv::Mat A(height*width, numImgs, CV_32FC1);
+    for (int k = 0; k < numImgs; k++) {
+        int idx = 0;
+        for (int i = 0; i < height; i++) {
+            for (int j = 0; j < width; j++) {
+                A.at<float>(idx++, k) = camImages[k].data[i*width+j];
             }
         }
     }
     
-    /* cv::SVD::compute seems to be painfully slow in version 2.4.5 */
-	cvSVD(A, D, U, V);
+    cv::Mat U,S,V;
+    cv::SVD::compute(A, S, U, V, cv::SVD::MODIFY_A);
     
-    cvReleaseMat(&A);
-    cvReleaseMat(&V);
-    cvReleaseMat(&D);
-    
-	cv::Mat S(height, width, CV_8UC3, cv::Scalar::all(0));
-    for (int i=0; i<height; i++) {
-        for (int j=0; j<width; j++) {
+    cv::Mat N(height, width, CV_8UC3, cv::Scalar::all(0));
+    int idx = 0;
+    for (int i = 0; i < height; i++) {
+        for (int j = 0; j < width; j++) {
+            float rSxyz = 1.0f / sqrt(U.at<float>(idx, 0)*U.at<float>(idx, 0) +
+                                      U.at<float>(idx, 1)*U.at<float>(idx, 1) +
+                                      U.at<float>(idx, 2)*U.at<float>(idx, 2));
             
-            float rSxyz = 1.0 / sqrt(U->data.fl[i*width*numImgs+j*numImgs+0]*U->data.fl[i*width*numImgs+j*numImgs+0] +
-                                     U->data.fl[i*width*numImgs+j*numImgs+1]*U->data.fl[i*width*numImgs+j*numImgs+1] +
-                                     U->data.fl[i*width*numImgs+j*numImgs+2]*U->data.fl[i*width*numImgs+j*numImgs+2]);
-			/* U contains the eigenvectors of AAT, which are as well the z,x,y components of the surface normals for each pixel	*/
-            float sz = 128.0f + 127.0f * sgn(U->data.fl[i*width*numImgs+j*numImgs+0]) * fabs(U->data.fl[i*width*numImgs+j*numImgs+0]) * rSxyz;
-            float sx = 128.0f + 127.0f * sgn(U->data.fl[i*width*numImgs+j*numImgs+1]) * fabs(U->data.fl[i*width*numImgs+j*numImgs+1]) * rSxyz;
-            float sy = 128.0f + 127.0f * sgn(U->data.fl[i*width*numImgs+j*numImgs+2]) * fabs(U->data.fl[i*width*numImgs+j*numImgs+2]) * rSxyz;
+            /* U contains the eigenvectors of AAT, which are as well the z,x,y components of the surface normals for each pixel	*/
+            float sz = 128.0f + 127.0f * sgn(U.at<float>(idx, 0)) * fabs(U.at<float>(idx, 0)) * rSxyz;
+            float sx = 128.0f + 127.0f * sgn(U.at<float>(idx, 1)) * fabs(U.at<float>(idx, 1)) * rSxyz;
+            float sy = 128.0f + 127.0f * sgn(U.at<float>(idx, 2)) * fabs(U.at<float>(idx, 2)) * rSxyz;
             
-            S.data[i*width*3+j*3+0] = sz;
-            S.data[i*width*3+j*3+1] = sx;
-            S.data[i*width*3+j*3+2] = sy;
+            N.data[i*width*3+j*3+0] = sz;
+            N.data[i*width*3+j*3+1] = sx;
+            N.data[i*width*3+j*3+2] = sy;
+            idx += 1;
         }
     }
-
-    return S;
+    
+    return N;
 }
 
 cv::Mat localHeightfield(cv::Mat Normals, cv::Mat Mask) {
