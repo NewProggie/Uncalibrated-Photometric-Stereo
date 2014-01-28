@@ -287,7 +287,8 @@ int main(int argc, char *argv[]) {
     
     cv::Mat S = computeNormals(camImages);
 	cv::Mat Normalmap;
-	cv::cvtColor(S, Normalmap, CV_BGR2RGB);
+    S.copyTo(Normalmap, imageMask(camImages));
+	cv::cvtColor(Normalmap, Normalmap, CV_BGR2RGB);
 	cv::imshow("normalmap.png", Normalmap);
 
 	cv::Mat Depth = localHeightfield(S, imageMask(camImages));
