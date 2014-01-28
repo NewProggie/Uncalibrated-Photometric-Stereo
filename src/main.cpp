@@ -162,21 +162,23 @@ cv::Mat computeNormals(std::vector<cv::Mat> camImages) {
         }
     }
     
-    cv::Mat U,S,V;
-    cv::SVD::compute(A, S, U, V, cv::SVD::MODIFY_A);
+	/* speeding up computation, SVD from A^TA instead of AA^T */
+    cv::Mat U,S,Vt;
+	cv::SVD::compute(A.t(), S, U, Vt, cv::SVD::MODIFY_A);
+	cv::Mat EV = Vt.t();
     
     cv::Mat N(height, width, CV_8UC3, cv::Scalar::all(0));
     int idx = 0;
     for (int i = 0; i < height; i++) {
         for (int j = 0; j < width; j++) {
-            float rSxyz = 1.0f / sqrt(U.at<float>(idx, 0)*U.at<float>(idx, 0) +
-                                      U.at<float>(idx, 1)*U.at<float>(idx, 1) +
-                                      U.at<float>(idx, 2)*U.at<float>(idx, 2));
+            float rSxyz = 1.0f / sqrt(EV.at<float>(idx, 0)*EV.at<float>(idx, 0) +
+                                      EV.at<float>(idx, 1)*EV.at<float>(idx, 1) +
+                                      EV.at<float>(idx, 2)*EV.at<float>(idx, 2));
             
             /* U contains the eigenvectors of AAT, which are as well the z,x,y components of the surface normals for each pixel	*/
-            float sz = 128.0f + 127.0f * sgn(U.at<float>(idx, 0)) * fabs(U.at<float>(idx, 0)) * rSxyz;
-            float sx = 128.0f + 127.0f * sgn(U.at<float>(idx, 1)) * fabs(U.at<float>(idx, 1)) * rSxyz;
-            float sy = 128.0f + 127.0f * sgn(U.at<float>(idx, 2)) * fabs(U.at<float>(idx, 2)) * rSxyz;
+            float sz = 128.0f + 127.0f * sgn(EV.at<float>(idx, 0)) * fabs(EV.at<float>(idx, 0)) * rSxyz;
+            float sx = 128.0f + 127.0f * sgn(EV.at<float>(idx, 1)) * fabs(EV.at<float>(idx, 1)) * rSxyz;
+            float sy = 128.0f + 127.0f * sgn(EV.at<float>(idx, 2)) * fabs(EV.at<float>(idx, 2)) * rSxyz;
             
             N.at<cv::Vec3b>(i, j) = cv::Vec3b(sz, sx, sy);
             idx += 1;
