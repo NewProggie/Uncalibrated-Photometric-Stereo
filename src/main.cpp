@@ -175,12 +175,12 @@ cv::Mat computeNormals(std::vector<cv::Mat> camImages) {
                                       EV.at<float>(idx, 1)*EV.at<float>(idx, 1) +
                                       EV.at<float>(idx, 2)*EV.at<float>(idx, 2));
             
-            /* U contains the eigenvectors of AAT, which are as well the z,x,y components of the surface normals for each pixel	*/
+            /* V contains the eigenvectors of A^TA, which are as well the z,x,y components of the surface normals for each pixel	*/
             float sz = 128.0f + 127.0f * sgn(EV.at<float>(idx, 0)) * fabs(EV.at<float>(idx, 0)) * rSxyz;
             float sx = 128.0f + 127.0f * sgn(EV.at<float>(idx, 1)) * fabs(EV.at<float>(idx, 1)) * rSxyz;
             float sy = 128.0f + 127.0f * sgn(EV.at<float>(idx, 2)) * fabs(EV.at<float>(idx, 2)) * rSxyz;
             
-            N.at<cv::Vec3b>(i, j) = cv::Vec3b(sz, sx, sy);
+			N.at<cv::Vec3b>(i, j) = cv::Vec3b(sx, sy, sz);   
             idx += 1;
         }
     }
@@ -194,45 +194,24 @@ cv::Mat localHeightfield(cv::Mat Normals, cv::Mat Mask) {
     int width = Normals.cols;
 	cv::Mat Z(height, width, CV_32FC1, cv::Scalar::all(0));
 
-	for (int k = 0; k < 5000; k++) {
+	for (int k = 0; k < 3000; k++) {
 		for (int i = 1; i < height-1; i++) {
 			for (int j = 1; j < width-1; j++) {
-				if (Mask.at<uchar>(cv::Point(j,i)) > 0) {
-					int top = Mask.at<uchar>(cv::Point(j,i-1));
-					int bottom = Mask.at<uchar>(cv::Point(j,i+1));
-					int left = Mask.at<uchar>(cv::Point(j-1,i));
-					int right = Mask.at<uchar>(cv::Point(j+1,i));
-					float zBottom = Z.at<float>(cv::Point(j,i+1));
-					float zTop = Z.at<float>(cv::Point(j,i-1));
-					float zRight = Z.at<float>(cv::Point(j+1,i));
-					float zLeft = Z.at<float>(cv::Point(j-1,i));
-					float uTop = Normals.at<cv::Vec3b>(cv::Point(j,i-1))[1];
-					float uCurr = Normals.at<cv::Vec3b>(cv::Point(j,i))[1];
-					float uLeft = Normals.at<cv::Vec3b>(cv::Point(j-1,i))[2];
-					float uRight = Normals.at<cv::Vec3b>(cv::Point(j,i))[2];
-					if (top > 0 && bottom > 0 && left > 0 && right > 0) {
-						Z.at<float>(cv::Point(j,i)) = 0.25 * (zBottom+zTop+zRight+zLeft+uTop-uCurr+uLeft-uRight);
-					} else if (top > 0 && bottom == 0 && left > 0 && right > 0) {
-						Z.at<float>(cv::Point(j,i)) = 0.33 * (zTop+zRight+zLeft)+0.25*(uTop-uCurr+uLeft-uRight);
-					} else if (top == 0 && bottom > 0 && left > 0 && right > 0) {
-						Z.at<float>(cv::Point(j,i)) = 0.33 * (zBottom+zRight+zLeft)+0.25*(-Normals.at<cv::Vec3b>(cv::Point(j,i+1))[1]+uCurr+uLeft-uRight);
-					} else if (top > 0 && bottom > 0 && left == 0 && right > 0) {
-						Z.at<float>(cv::Point(j,i)) = 0.33 * (zBottom+zTop+zRight)+0.25*(uTop-uCurr-Normals.at<cv::Vec3b>(cv::Point(j+1,i))[2]+uRight);
-					} else if (top > 0 && bottom > 0 && left > 0 && right == 0) {
-						Z.at<float>(cv::Point(j,i)) = 0.33 * (zBottom+zTop+zLeft)+0.25*(uTop-uCurr+uLeft-uRight);
-					} else if (top > 0 && bottom == 0 && left == 0 && right > 0) {
-						Z.at<float>(cv::Point(j,i)) = 0.5 * (zTop+zRight)+0.25*(uTop-uCurr-Normals.at<cv::Vec3b>(cv::Point(j+1,i))[2]+uRight);
-					} else if (top > 0 && bottom == 0 && left > 0 && right == 0) {
-						Z.at<float>(cv::Point(j,i)) = 0.5 * (zTop+zLeft)+0.25*(uTop-uCurr+uLeft-uRight);
-					} else if (top == 0 && bottom > 0 && left == 0 && right > 0) {
-						Z.at<float>(cv::Point(j,i)) = 0.5 * (zBottom+zRight)+0.25*(-Normals.at<cv::Vec3b>(cv::Point(j,i+1))[1]+uCurr-Normals.at<cv::Vec3b>(cv::Point(j+1,i))[2]+uRight);
-					} else if (top == 0 && bottom > 0 && left > 0 && right == 0) {
-						Z.at<float>(cv::Point(j,i)) = 0.5*(zBottom+zLeft)+0.25*(-Normals.at<cv::Vec3b>(cv::Point(j,i+1))[1]+uCurr+uLeft-uRight);
-					}
-                    if (Z.at<float>(cv::Point(j,i)) < 0.0f) {
-                        Z.at<float>(cv::Point(j,i)) = 0.0f;
-                    }
-				}
+				int up = Mask.at<uchar>(cv::Point(j,i-1));
+				int down = Mask.at<uchar>(cv::Point(j,i+1));
+				int left = Mask.at<uchar>(cv::Point(j-1,i));
+				int right = Mask.at<uchar>(cv::Point(j+1,i));
+				float zU = Z.at<float>(cv::Point(j,i-1));
+				float zD = Z.at<float>(cv::Point(j,i+1));
+				float zL = Z.at<float>(cv::Point(j-1,i));
+				float zR = Z.at<float>(cv::Point(j+1,i));
+				float nxC = Normals.at<cv::Vec3b>(cv::Point(j,i))[0];
+				float nyC = Normals.at<cv::Vec3b>(cv::Point(j,i))[1];
+				float nxU = Normals.at<cv::Vec3b>(cv::Point(j,i-1))[0];
+				float nyL = Normals.at<cv::Vec3b>(cv::Point(j-1,i))[1];
+				if (up > 0 && down > 0 && left > 0 && right > 0) 
+					Z.at<float>(cv::Point(j,i)) = 1.0f/4.0f * ( zD + zU + zR + zL + nxU - nxC + nyL - nyC );
+				
 			}
 		}
 	}
@@ -250,64 +229,6 @@ cv::Mat localHeightfield(cv::Mat Normals, cv::Mat Mask) {
             Z.at<float>(cv::Point(j,i)) = (float) a + (b-a) * ((Z.at<float>(cv::Point(j,i)) - min) / (max-min));
         }
     }
-    
-    return Z;
-}
-
-cv::Mat globalHeightfield(cv::Mat Normals) {
-    
-    int height = Normals.rows;
-    int width = Normals.cols;
-	cv::Mat Pgrads(height, width, CV_32FC1, cv::Scalar::all(0));
-    cv::Mat Qgrads(height, width, CV_32FC1, cv::Scalar::all(0));
-    
-    for (int y=0; y<height; y++) {
-        for (int x=0; x<width; x++) {
-			/* reordering surface normals (from U, which was z,x,y) */
-			cv::Vec3f n = cv::Vec3f(Normals.data[y*width*3+x*3+1], Normals.data[y*width*3+x*3+2], Normals.data[y*width*3+x*3+0]);
-			if (n[2] == 0.0f) { n[2] = 1.0f; }
-			cv::normalize(n, n);
-			Pgrads.at<float>(cv::Point(x,y)) = n[0]/n[2];
-			Qgrads.at<float>(cv::Point(x,y)) = n[1]/n[2];
-        }
-    }
-
-	cv::imshow("Pgrads", Pgrads);
-	cv::imshow("Qgrads", Qgrads);
-
-    cv::Mat P(Pgrads.rows, Pgrads.cols, CV_32FC2, cv::Scalar::all(0));
-    cv::Mat Q(Pgrads.rows, Pgrads.cols, CV_32FC2, cv::Scalar::all(0));
-    cv::Mat Z(Pgrads.rows, Pgrads.cols, CV_32FC2, cv::Scalar::all(0));
-    
-    /* p,q gradients from normal map */
-    cv::dft(Pgrads, P, cv::DFT_COMPLEX_OUTPUT);
-    cv::dft(Qgrads, Q, cv::DFT_COMPLEX_OUTPUT);
-    for (int i=0; i<Pgrads.rows; i++) {
-        for (int j=0; j<Pgrads.cols; j++) {
-            if (i != 0 || j != 0) {
-				float u = sin(i*2.0f*float(CV_PI)/float(Pgrads.rows));
-                float v = sin(j*2.0f*float(CV_PI)/float(Pgrads.cols));
-                float uv = u*u + v*v;
-                float d = uv;
-                Z.at<cv::Vec2f>(i,j)[0] = (u*P.at<cv::Vec2f>(i,j)[1] + v*Q.at<cv::Vec2f>(i,j)[1]) / d;
-                Z.at<cv::Vec2f>(i,j)[1] = (-u*P.at<cv::Vec2f>(i,j)[0] - v*Q.at<cv::Vec2f>(i,j)[0]) / d;
-            }
-        }
-    }
-    
-    /* setting unknown average height to zero */
-    Z.at<cv::Vec2f>(0,0)[0] = 0;
-    Z.at<cv::Vec2f>(0,0)[1] = 0;
-    
-    cv::dft(Z, Z, cv::DFT_INVERSE | cv::DFT_SCALE | cv::DFT_REAL_OUTPUT);
-
-    /* display depth map */
-	double min, max;
-	cv::minMaxIdx(Z, &min, &max);
-	std::cout << "min,max: " << min << "," << max << std::endl;
-	cv::Mat adjMap;
-	cv::convertScaleAbs(Z, adjMap, 255 / max);
-	cv::imshow("Global Depthmap", adjMap);
     
     return Z;
 }
@@ -365,13 +286,11 @@ int main(int argc, char *argv[]) {
     }
     
     cv::Mat S = computeNormals(camImages);
+	cv::Mat Normalmap;
+	cv::cvtColor(S, Normalmap, CV_BGR2RGB);
+	cv::imshow("normalmap.png", Normalmap);
 
-	cv::Mat Normals(S.rows, S.cols, CV_8UC3, cv::Scalar::all(0));
-	cv::Mat Mask = imageMask(camImages);
-	S.copyTo(Normals, Mask);
-	cv::imshow("(masked) normalmap.png", Normals);
-
-	cv::Mat Depth = localHeightfield(Normals, Mask);
+	cv::Mat Depth = localHeightfield(S, imageMask(camImages));
     double min, max;
     cv::minMaxIdx(Depth, &min, &max);
 	displayMesh(Depth, camImages[0]);
