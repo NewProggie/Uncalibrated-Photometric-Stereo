@@ -5,7 +5,6 @@
 #include <opencv2/core/core.hpp>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
-#include <cv.h>
 #include <vtkSmartPointer.h>
 #include <vtkPolyDataMapper.h>
 #include <vtkPolyData.h>
@@ -145,6 +144,100 @@ cv::Mat lightPattern(int width, int height, int j, int N) {
     return img;
 }
 
+cv::Mat computeSVD(cv::Mat A) {
+
+	/* speeding up computation, SVD from A^TA instead of AA^T */
+    cv::Mat U,S,Vt;
+	cv::SVD::compute(A.t(), S, U, Vt, cv::SVD::MODIFY_A);
+	cv::Mat EV = Vt.t();
+
+	return EV;
+}
+
+int maxRowOutlier(cv::Mat A) {
+
+	int idx = 0;
+	int max = A.cols;
+	for (int i = 0; i < A.rows; i++) {
+		int n = cv::countNonZero(A.row(i));
+		if ( n < max) {
+			max = n;
+			idx = i;
+		}
+	}
+	return idx;
+}
+
+cv::Mat removeRow(cv::Mat A, int rowIdx) {
+
+	cv::Mat B;
+	for (int i = 0; i < A.rows; i++) {
+		if (i != rowIdx) {
+			B.push_back(A.row(i));
+		}
+	}
+	return B;
+}
+
+cv::Mat addRow(cv::Mat A, cv::Mat row, int rowIdx) {
+
+	/* TODO: assert dimensions */
+	cv::Mat B;
+	for (int i = 0; i < A.rows; i++) {
+		if (i == rowIdx) {
+			B.push_back(row);
+		}
+		B.push_back(A.row(i));
+	}
+	return B;
+}
+
+cv::Mat computeRobustSVD(cv::Mat X) {
+
+	/* row scraping */
+	std::vector<cv::Mat> removedRows;
+	std::vector<int> removedRowsIdx;
+	for (int i = 0; i < 100; i++) {
+		int out = maxRowOutlier(X);
+		removedRows.push_back(X.row(out));
+		removedRowsIdx.push_back(out);
+		X = removeRow(X, out);
+	}
+
+	cv::Mat U, W, Vt;
+	cv::SVD::compute(X, U, W, Vt);
+	cv::Mat V2t = W*Vt;
+
+	/* row sticking */
+	for (int i = 0; i < removedRows.size(); i++) {
+		cv::Mat xi = removedRows[i];
+		cv::Mat V3t = V2t.clone();
+		for (int j = 0; j < xi.cols; j++) {
+			if (xi.at<uchar>(cv::Point(j,0)) == 0) {
+				V3t(cv::Rect(j,0,1,V3t.rows)) = cv::Scalar::all(0);
+			}
+		}
+		cv::Mat V4t = V3t.inv(cv::DECOMP_SVD);
+
+		cv::Mat uiT = xi * V4t;
+		
+		cv::Mat xi2T(xi.rows, xi.cols, xi.type());
+		for (int k = 0; k < xi2T.cols; k++) {
+			if (xi.at<uchar>(cv::Point(k,0)) != 0) {
+				xi2T.at<uchar>(cv::Point(k,0)) = xi.at<uchar>(cv::Point(k,0));
+			} else {
+				cv::Mat uTVT = uiT * V2t;
+				xi2T.at<uchar>(cv::Point(k,0)) = (uchar) uTVT.at<float>(cv::Point(k,0));
+			}
+			
+		}
+
+		X = addRow(X, xi2T, removedRowsIdx[i]);
+	}
+
+	return computeSVD(X);
+}
+
 cv::Mat computeNormals(std::vector<cv::Mat> camImages, cv::Mat Mask = cv::Mat()) {
     
     int height = camImages[0].rows;
@@ -152,40 +245,37 @@ cv::Mat computeNormals(std::vector<cv::Mat> camImages, cv::Mat Mask = cv::Mat())
     int numImgs = camImages.size();
     
     /* populate A */
-    cv::Mat A(height*width, numImgs, CV_32FC1);
+	cv::Mat A(height*width, numImgs, CV_32FC1, cv::Scalar::all(0));
     for (int k = 0; k < numImgs; k++) {
         int idx = 0;
         for (int i = 0; i < height; i++) {
             for (int j = 0; j < width; j++) {
-                A.at<float>(idx++, k) = camImages[k].data[i*width+j];
+				A.at<float>(idx++, k) = camImages[k].data[i*width+j] * sgn(Mask.at<uchar>(cv::Point(j, i)));
             }
         }
     }
     
-	/* speeding up computation, SVD from A^TA instead of AA^T */
-    cv::Mat U,S,Vt;
-	cv::SVD::compute(A.t(), S, U, Vt, cv::SVD::MODIFY_A);
-	cv::Mat EV = Vt.t();
+	cv::Mat EV = computeSVD(A);
     
     cv::Mat N(height, width, CV_8UC3, cv::Scalar::all(0));
     int idx = 0;
     for (int i = 0; i < height; i++) {
         for (int j = 0; j < width; j++) {
-            float rSxyz = 1.0f / sqrt(EV.at<float>(idx, 0)*EV.at<float>(idx, 0) +
-                                      EV.at<float>(idx, 1)*EV.at<float>(idx, 1) +
-                                      EV.at<float>(idx, 2)*EV.at<float>(idx, 2));
-            
-            /* V contains the eigenvectors of A^TA, which are as well the z,x,y components of the surface normals for each pixel	*/
-            float sz = 128.0f + 127.0f * sgn(EV.at<float>(idx, 0)) * fabs(EV.at<float>(idx, 0)) * rSxyz;
-            float sx = 128.0f + 127.0f * sgn(EV.at<float>(idx, 1)) * fabs(EV.at<float>(idx, 1)) * rSxyz;
-            float sy = 128.0f + 127.0f * sgn(EV.at<float>(idx, 2)) * fabs(EV.at<float>(idx, 2)) * rSxyz;
-            
-            if (Mask.at<uchar>(cv::Point(j, i)) == 0) {
-                N.at<cv::Vec3b>(i, j) = cv::Vec3b(0, 0, 255);
-            } else {
-                N.at<cv::Vec3b>(i, j) = cv::Vec3b(sx, sy, sz);
-            }
-			  
+
+			if (Mask.at<uchar>(cv::Point(j, i)) == 0) {
+				N.at<cv::Vec3b>(i, j) = cv::Vec3b(0, 0, 255);
+			} else {
+				float rSxyz = 1.0f / sqrt(EV.at<float>(idx, 0)*EV.at<float>(idx, 0) +
+					                      EV.at<float>(idx, 1)*EV.at<float>(idx, 1) +
+					                      EV.at<float>(idx, 2)*EV.at<float>(idx, 2));
+
+				/* V contains the eigenvectors of A^TA, which are as well the z,x,y components of the surface normals for each pixel	*/
+				float sz = 128.0f + 127.0f * sgn(EV.at<float>(idx, 0)) * fabs(EV.at<float>(idx, 0)) * rSxyz;
+				float sx = 128.0f + 127.0f * sgn(EV.at<float>(idx, 1)) * fabs(EV.at<float>(idx, 1)) * rSxyz;
+				float sy = 128.0f + 127.0f * sgn(EV.at<float>(idx, 2)) * fabs(EV.at<float>(idx, 2)) * rSxyz;
+
+				N.at<cv::Vec3b>(i, j) = cv::Vec3b(sx, sy, sz);
+			}
             idx += 1;
         }
     }
@@ -271,7 +361,7 @@ int main(int argc, char *argv[]) {
     int screenWidth = 1440;
     int screenHeight = 900;
     int numPics = 4;
-    
+
 	/* create capture device (webcam on Macbook Pro) */
 	std::vector<cv::Mat> camImages;
 	captureDevice = cv::VideoCapture(CV_CAP_ANY);
@@ -317,9 +407,11 @@ int main(int argc, char *argv[]) {
         s << "0" << i << ".jpg";
         cv::imshow(s.str(), camImages[i]);
     }
+
     
     /* threshold images */
     cv::Mat Mask = imageMask(camImages);
+	cv::imshow("Mask", Mask);
     
     /* compute normal map */
     cv::Mat S = computeNormals(camImages, Mask);
@@ -329,8 +421,6 @@ int main(int argc, char *argv[]) {
 
     /* compute depth map */
 	cv::Mat Depth = localHeightfield(S);
-    double min, max;
-    cv::minMaxIdx(Depth, &min, &max);
 	displayMesh(Depth, camImages[0]);
 	cv::waitKey(0);
     
