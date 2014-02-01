@@ -114,17 +114,21 @@ void displayMesh(cv::Mat depthImage, cv::Mat texture) {
 }
 
 cv::Mat imageMask(std::vector<cv::Mat> camImages) {
+    
+    assert(camImages.size() > 0);
+    cv::Mat image = camImages[0].clone();
+    int quarter = image.cols/4.0;
+    int eighth = image.rows/8.0;
 
-	cv::Mat Max, Blurry, Mask;
-	assert(camImages.size() >= 3);
-	cv::GaussianBlur(camImages[0]+camImages[1]+camImages[2], Blurry, cv::Size(5,5), 2.0);
-	cv::threshold(Blurry, Mask, 13, 255, CV_THRESH_BINARY);
-	cv::dilate(Mask, Mask, cv::Mat());
-    cv::dilate(Mask, Mask, cv::Mat());
-    cv::erode(Mask, Mask, cv::Mat());
-    cv::erode(Mask, Mask, cv::Mat());
-    cv::erode(Mask, Mask, cv::Mat());
-	return Mask;
+    cv::Mat result, bgModel, fgModel;
+    cv::Rect area(quarter, eighth, 3*quarter, 7*eighth);
+    
+    /* grabcut expects rgb images */
+    cv::cvtColor(image, image, CV_GRAY2BGR);
+    cv::grabCut(image, result, area, bgModel, fgModel, 1, cv::GC_INIT_WITH_RECT);
+    
+    cv::compare(result, cv::GC_PR_FGD, result, cv::CMP_EQ);
+    return result;
 }
 
 /**
@@ -324,7 +328,7 @@ cv::Mat cvtFloatToGrayscale(cv::Mat F, int limit = 255) {
 cv::Mat localHeightfield(cv::Mat Normals) {
 
     const int pyramidLevels = 4;
-    const int iterations = 300;
+    const int iterations = 700;
     
     /* building image pyramid */
     std::vector<cv::Mat> pyrNormals;
