@@ -148,100 +148,6 @@ cv::Mat lightPattern(int width, int height, int j, int N) {
     return img;
 }
 
-cv::Mat computeSVD(cv::Mat A) {
-
-	/* speeding up computation, SVD from A^TA instead of AA^T */
-    cv::Mat U,S,Vt;
-	cv::SVD::compute(A.t(), S, U, Vt, cv::SVD::MODIFY_A);
-	cv::Mat EV = Vt.t();
-
-	return EV;
-}
-
-int maxRowOutlier(cv::Mat A) {
-
-	int idx = 0;
-	int max = A.cols;
-	for (int i = 0; i < A.rows; i++) {
-		int n = cv::countNonZero(A.row(i));
-		if ( n < max) {
-			max = n;
-			idx = i;
-		}
-	}
-	return idx;
-}
-
-cv::Mat removeRow(cv::Mat A, int rowIdx) {
-
-	cv::Mat B;
-	for (int i = 0; i < A.rows; i++) {
-		if (i != rowIdx) {
-			B.push_back(A.row(i));
-		}
-	}
-	return B;
-}
-
-cv::Mat addRow(cv::Mat A, cv::Mat row, int rowIdx) {
-
-	/* TODO: assert dimensions */
-	cv::Mat B;
-	for (int i = 0; i < A.rows; i++) {
-		if (i == rowIdx) {
-			B.push_back(row);
-		}
-		B.push_back(A.row(i));
-	}
-	return B;
-}
-
-cv::Mat computeRobustSVD(cv::Mat X) {
-
-	/* row scraping */
-	std::vector<cv::Mat> removedRows;
-	std::vector<int> removedRowsIdx;
-	for (int i = 0; i < 100; i++) {
-		int out = maxRowOutlier(X);
-		removedRows.push_back(X.row(out));
-		removedRowsIdx.push_back(out);
-		X = removeRow(X, out);
-	}
-
-	cv::Mat U, W, Vt;
-	cv::SVD::compute(X, U, W, Vt);
-	cv::Mat V2t = W*Vt;
-
-	/* row sticking */
-	for (int i = 0; i < removedRows.size(); i++) {
-		cv::Mat xi = removedRows[i];
-		cv::Mat V3t = V2t.clone();
-		for (int j = 0; j < xi.cols; j++) {
-			if (xi.at<uchar>(cv::Point(j,0)) == 0) {
-				V3t(cv::Rect(j,0,1,V3t.rows)) = cv::Scalar::all(0);
-			}
-		}
-		cv::Mat V4t = V3t.inv(cv::DECOMP_SVD);
-
-		cv::Mat uiT = xi * V4t;
-		
-		cv::Mat xi2T(xi.rows, xi.cols, xi.type());
-		for (int k = 0; k < xi2T.cols; k++) {
-			if (xi.at<uchar>(cv::Point(k,0)) != 0) {
-				xi2T.at<uchar>(cv::Point(k,0)) = xi.at<uchar>(cv::Point(k,0));
-			} else {
-				cv::Mat uTVT = uiT * V2t;
-				xi2T.at<uchar>(cv::Point(k,0)) = (uchar) uTVT.at<float>(cv::Point(k,0));
-			}
-			
-		}
-
-		X = addRow(X, xi2T, removedRowsIdx[i]);
-	}
-
-	return computeSVD(X);
-}
-
 cv::Mat computeNormals(std::vector<cv::Mat> camImages, cv::Mat Mask = cv::Mat()) {
     
     int height = camImages[0].rows;
@@ -259,7 +165,10 @@ cv::Mat computeNormals(std::vector<cv::Mat> camImages, cv::Mat Mask = cv::Mat())
         }
     }
     
-	cv::Mat EV = computeSVD(A);
+	/* speeding up computation, SVD from A^TA instead of AA^T */
+    cv::Mat U,S,Vt;
+	cv::SVD::compute(A.t(), S, U, Vt, cv::SVD::MODIFY_A);
+	cv::Mat EV = Vt.t();
     
     cv::Mat N(height, width, CV_8UC3, cv::Scalar::all(0));
     int idx = 0;
@@ -345,7 +254,6 @@ cv::Mat localHeightfield(cv::Mat Normals) {
         updateHeights(pyrNormals[i], Z, iterations);
         cv::pyrUp(Z, Z);
     }
-	cv::imshow("Local Depthmap", cvtFloatToGrayscale(Z));
 
     /* linear transformation of matrix values from [min,max] -> [a,b] */
     double min, max;
@@ -369,7 +277,7 @@ int main(int argc, char *argv[]) {
 	/* create capture device (webcam on Macbook Pro) */
 	std::vector<cv::Mat> camImages;
 	captureDevice = cv::VideoCapture(CV_CAP_ANY);
-	if (!captureDevice.isOpened()) {
+	if (captureDevice.isOpened()) {
 		std::cerr << "capture device error" << std::endl;
 		/* using asset images */
 		for (int i = 0; i < numPics; i++) {
@@ -425,6 +333,7 @@ int main(int argc, char *argv[]) {
 
     /* compute depth map */
 	cv::Mat Depth = localHeightfield(S);
+    cv::imshow("Local Depthmap", cvtFloatToGrayscale(Depth));
 	displayMesh(Depth, camImages[0]);
 	cv::waitKey(0);
     
