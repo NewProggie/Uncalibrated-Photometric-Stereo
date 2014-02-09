@@ -1,26 +1,11 @@
 #include <iostream>
 #include <vector>
 #include <sstream>
-#include <assert.h>
+#include <fstream>
+
 #include <opencv2/core/core.hpp>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
-#include <vtkSmartPointer.h>
-#include <vtkPolyDataMapper.h>
-#include <vtkPolyData.h>
-#include <vtkActor.h>
-#include <vtkProperty.h>
-#include <vtkImageViewer.h>
-#include <vtkRenderWindowInteractor.h>
-#include <vtkInteractorStyleImage.h>
-#include <vtkRenderer.h>
-#include <vtkCellArray.h>
-#include <vtkPoints.h>
-#include <vtkPointData.h>
-#include <vtkFloatArray.h>
-#include <vtkTriangle.h>
-#include <vtkPLYWriter.h>
-#include <vtkWindowedSincPolyDataFilter.h>
 
 cv::VideoCapture captureDevice;
 
@@ -28,89 +13,50 @@ template <typename T> int sgn(T val) {
     return (T(0) < val) - (val < T(0));
 }
 
-void displayMesh(cv::Mat depthImage, cv::Mat texture) {
+void exportMesh(cv::Mat Depth, cv::Mat Normals, cv::Mat texture) {
     
-    /* creating visualization pipeline which basically looks like this:
-     vtkPoints -> vtkPolyData -> vtkPolyDataMapper -> vtkActor -> vtkRenderer */
-    vtkSmartPointer<vtkPoints> points = vtkSmartPointer<vtkPoints>::New();
-    vtkSmartPointer<vtkPolyData> polyData = vtkSmartPointer<vtkPolyData>::New();
-    vtkSmartPointer<vtkPolyDataMapper> modelMapper = vtkSmartPointer<vtkPolyDataMapper>::New();
-    vtkSmartPointer<vtkActor> modelActor = vtkSmartPointer<vtkActor>::New();
-    vtkSmartPointer<vtkRenderer> renderer = vtkSmartPointer<vtkRenderer>::New();
-    vtkSmartPointer<vtkCellArray> vtkTriangles = vtkSmartPointer<vtkCellArray>::New();
+    /* writing obj for export */
+    std::ofstream objFile, mtlFile;
+    objFile.open("export.obj");
     
-    int height = depthImage.rows;
-    int width = depthImage.cols;
+    int width = Depth.cols;
+    int height = Depth.rows;
     
-    /* insert x,y,z coords and color information */
-    vtkSmartPointer<vtkUnsignedCharArray> colors = vtkSmartPointer<vtkUnsignedCharArray>::New();
-    colors->SetNumberOfComponents(3);
-    colors->SetName("Colors");
-    for (int y=0; y<height; y++) {
-        for (int x=0; x<width; x++) {
-            points->InsertNextPoint(x, y, depthImage.at<float>(cv::Point(x,y)));
-            colors->InsertNextTuple3(texture.at<uchar>(cv::Point(x,y)),
-                                     texture.at<uchar>(cv::Point(x,y)),
-                                     texture.at<uchar>(cv::Point(x,y)));
+    /* vertices, normals, texture coords */
+    objFile << "mtllib export.mtl" << std::endl;
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            objFile << "v " << x << " " << y << " " << Depth.at<float>(cv::Point(x,y)) << std::endl;
+            objFile << "vt " << x/(width-1.0f) << " " << (1.0f-y)/height << " " << "0.0" << std::endl;
+            objFile << "vn " << (float) Normals.at<cv::Vec3b>(y,x)[0] << " " << (float) Normals.at<cv::Vec3b>(y,x)[1] << " " << (float) Normals.at<cv::Vec3b>(y,x)[2] << std::endl;
         }
     }
     
-    /* setup the connectivity between grid points */
-    vtkSmartPointer<vtkTriangle> triangle = vtkSmartPointer<vtkTriangle>::New();
-    triangle->GetPointIds()->SetNumberOfIds(3);
-    for (int i=0; i<height-1; i++) {
-        for (int j=0; j<width-1; j++) {
-            triangle->GetPointIds()->SetId(2, j+(i*width));
-            triangle->GetPointIds()->SetId(1, (i+1)*width+j);
-            triangle->GetPointIds()->SetId(0, j+(i*width)+1);
-            vtkTriangles->InsertNextCell(triangle);
-            triangle->GetPointIds()->SetId(2, (i+1)*width+j);
-            triangle->GetPointIds()->SetId(1, (i+1)*width+j+1);
-            triangle->GetPointIds()->SetId(0, j+(i*width)+1);
-            vtkTriangles->InsertNextCell(triangle);
+    /* faces */
+    objFile << "usemtl picture" << std::endl;
+    for (int y = 0; y < height-1; y++) {
+        for (int x = 0; x < width-1; x++) {
+            int f1 = x+y*width+1;
+            int f2 = x+y*width+2;
+            int f3 = x+(y+1)*width+1;
+            int f4 = x+(y+1)*width+2;
+            objFile << "f " << f1 << "/" << f1 << "/" << f1 << " ";
+            objFile << f2 << "/" << f2 << "/" << f2 << " ";
+            objFile << f3 << "/" << f3 << "/" << f3 << std::endl;
+            objFile << "f " << f2 << "/" << f2 << "/" << f2 << " ";
+            objFile << f4 << "/" << f4 << "/" << f4 << " ";
+            objFile << f3 << "/" << f3 << "/" << f3 << std::endl;
         }
     }
-    polyData->SetPoints(points);
-    polyData->SetPolys(vtkTriangles);
-    polyData->GetPointData()->SetScalars(colors);
     
-    /* mesh smoothing */
-    vtkSmartPointer<vtkWindowedSincPolyDataFilter> smoother = vtkSmartPointer<vtkWindowedSincPolyDataFilter>::New();
-    smoother->SetInputData(polyData);
-    smoother->SetNumberOfIterations(15);
-    smoother->BoundarySmoothingOff();
-    smoother->FeatureEdgeSmoothingOff();
-    smoother->SetFeatureAngle(120.0);
-    smoother->SetPassBand(.001);
-    smoother->NonManifoldSmoothingOn();
-    smoother->NormalizeCoordinatesOn();
-    smoother->Update();
+    /* texture */
+    cv::imwrite("export.jpg", texture);
+    mtlFile.open("export.mtl");
+    mtlFile << "newmtl picture" << std::endl;
+    mtlFile << "map_Kd export.jpg" << std::endl;
     
-    /* meshlab-ish background */
-    modelMapper->SetInputConnection(smoother->GetOutputPort());
-    renderer->SetBackground(.45, .45, .9);
-    renderer->SetBackground2(.0, .0, .0);
-    renderer->GradientBackgroundOn();
-    vtkSmartPointer<vtkRenderWindow> renderWindow = vtkSmartPointer<vtkRenderWindow>::New();
-    renderWindow->AddRenderer(renderer);
-    modelActor->SetMapper(modelMapper);
-    
-    renderer->AddActor(modelActor);
-    vtkSmartPointer<vtkRenderWindowInteractor> interactor = vtkSmartPointer<vtkRenderWindowInteractor>::New();
-    interactor->SetRenderWindow(renderWindow);
-
-	/* exporting model */
-	vtkSmartPointer<vtkPLYWriter> plyExporter = vtkSmartPointer<vtkPLYWriter>::New();
-	plyExporter->SetInputData(polyData);
-	plyExporter->SetFileName("export.ply");
-	plyExporter->SetColorModeToDefault();
-	plyExporter->SetArrayName("Colors");
-	plyExporter->Update();
-	plyExporter->Write();
-    
-    /* render mesh */
-    renderWindow->Render();
-    interactor->Start();
+    objFile.close();
+    mtlFile.close();
 }
 
 cv::Mat imageMask(std::vector<cv::Mat> camImages) {
@@ -277,7 +223,7 @@ int main(int argc, char *argv[]) {
 	/* create capture device (webcam on Macbook Pro) */
 	std::vector<cv::Mat> camImages;
 	captureDevice = cv::VideoCapture(CV_CAP_ANY);
-	if (captureDevice.isOpened()) {
+	if (!captureDevice.isOpened()) {
 		std::cerr << "capture device error" << std::endl;
 		/* using asset images */
 		for (int i = 0; i < numPics; i++) {
@@ -334,7 +280,8 @@ int main(int argc, char *argv[]) {
     /* compute depth map */
 	cv::Mat Depth = localHeightfield(S);
     cv::imshow("Local Depthmap", cvtFloatToGrayscale(Depth));
-	displayMesh(Depth, camImages[0]);
+    
+    exportMesh(Depth, S, camImages[0]);
 	cv::waitKey(0);
     
     return 0;
